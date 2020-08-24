@@ -419,6 +419,97 @@ func (SelList SelDels) Less(i, j int) bool {
 ```
 函数`func (SelList SelDels) Less(i, j int) bool`中，方法的不同可以控制所设计的数据结构是大叉堆还是小叉堆。
 
+## Merkle结构树
+在上面介绍的主流共识算法中，在构建区块时，都提到了一个交易信息的元素
+```
+type Block struct {
+	......
+	BPM int				// 交易信息
+	......
+}
+```
+在区块链中，从创世区块开始，整个区块的高度就会只增不减，由于每一个区块都与之前的区块相关联，所以存储的数据将会是指数级增长。那么在区块链中，存储的数据就不宜过大，在区块链中是如何进行这种交易数据的存储？？答案是Merkle树。
+那么神奇的Merkle树到底是什么东西？
+简单理解，Merkle树其实就是把一大串的交易信息糅合成了一串唯一性的数字，这串唯一性的数字又极其便利去验证所有的交易。他的做法是：
+* 1.先将所有交易进行hash得到对应的hash值
+* 2.然后将同一时间段内的所有的交易进行排序，然后将交易两两一对
+* 3.将两两结对的hash值进行组合，然后继续按顺序两两结对，直到最后只剩下一个hash值，那这个值就是唯一的值，也就记录着所有的交易信息。
+基于上述思想，对Merkle树进行代码实现：
+
+**基本数据结构**
+```go
+//Merkle 树
+type MerkleTree struct {
+	RootNode *MerkleNode
+}
+
+//Merkle 节点
+type MerkleNode struct {
+	Left *MerkleNode
+	Right *MerkleNode
+	Data []byte
+}
+```
+**生成Merkle树中的节点**
+```go
+func NewMerkleNode(left, right *MerkleNode, data []byte) *MerkleNode {
+	merklenode := MerkleNode{}
+	if left == nil && right == nil {
+		merklenode.Data = data
+	} else {
+		//将两个数据进行合并 区块链中应该默认均为大端存储
+		sum := append(left.Data, right.Data...)
+		//进行 double hash
+		oneHash := sha256.Sum256(sum)
+		twoHash := sha256.Sum256(oneHash[:])
+		//把值赋给merkle节点的data
+		merklenode.Data = []byte(twoHash[:])
+	}
+	merklenode.Left = left
+	merklenode.Right = right
+
+	return &merklenode
+}
+```
+生成Merkle树中的节点，如果是叶子节点 则左子树 右子树Left，Right 为nil；如果为非叶子节点  根据Left、Right生成当前节点的hash。
+
+**构建Merkle树**
+```go
+func NewMerkleTree(data [][]byte) *MerkleTree {
+	var nodes []MerkleNode
+	//构建叶子节点
+	for _, nodeData := range data {
+		node := NewMerkleNode(nil, nil, nodeData)
+		nodes = append(nodes, *node)
+	}
+	j := 0
+	//每次循环 数据量减半
+	for dataAmount := len(data); dataAmount > 1; dataAmount = (len(data)+1)/2 {
+		//每两个数据拼接到一起  分为奇偶两种情况
+		if dataAmount%2 == 0 {   //当data数量为偶数时
+			for i := 0; i < len(data); i += 2 {
+				node := NewMerkleNode(&nodes[j+i], &nodes[j+i+1], nil)
+				nodes = append(nodes, *node)
+			}
+			j += dataAmount  //切换到下一层
+		} else if dataAmount%2 == 1 {
+			for i := 0; i < len(data); i += 2 {
+				if i == len(data)-1 {
+					node := NewMerkleNode(&nodes[j+i], &nodes[j+i], nil)
+					nodes = append(nodes, *node)
+				}
+				node := NewMerkleNode(&nodes[j+i], &nodes[j+i+1], nil)
+				nodes = append(nodes, *node)
+			}
+			j += dataAmount  //切换到下一层
+		}
+	}
+	mTree := MerkleTree{&(nodes[len(nodes)-1])}
+	return &mTree
+}
+```
+其中，需要注意的是，交易的数量分为奇数和偶数两种情况。如果是偶数情况，则正常处理，如果是奇数情况就对单笔交易进行hash处理即可。
+
 
 
 
