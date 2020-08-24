@@ -304,11 +304,120 @@ func pickWinner() {
 ### DPOS
 #### 概念
 + 委托代理权益证明，初始含有一些超级节点，每次会选出一部分超级节点负责代理出块。
-> 一开始设定时，默认一部分具有权威说话权的节点，这些节点是维护区块链安全与性能的核心。
+> 一开始设定时，默认一部分具有权威说话权的节点，这些节点是维护区块链安全与性能的
+核心。当然，如果超级节点中有恶意节点做了违反法则的事情，则被踢出超级节点列表。
 
 #### 特性
 可以达到百万甚至千万级别的tps，比POS高几个数量级；
 超级节点之间不存在争夺出块的情况，避免了出块时浪费区块的情况，以及不会遗漏区块。
+
+#### 代码实现
+* **基础数据结构**
+```
+type Block struct {
+	Index  int			// 高度
+	Timestamp string		// 时间戳
+	BPM int				// 交易信息
+	PrevHash string     // 上一个哈希值
+	HashCode string		// 当前的哈希值
+	Delegate string    //  代理人 （超级节点）
+}
+```
+	+ 在DPOS中有个超级节点的概念，就是这个节点的权限比其他普通节点的权限要大，超级节点主要用于维护整个区块链网络的安全性以及性能方面的需求。
+	+ 超级节点加入，使得基于DPOS的区块链网络的性能提高了很多，但同时由于超级节点的加入，使得人们对基于DPOS的区块链有着争议，因为在这个网络中并不是完全的去中心化的网络。
+	+ 在设计的数据结构中，`Delegate`就代表着出这个区块的超级节点。
+	
+* **挑选超级节点**
+
+	DPOS的核心部分就在于如何挑选超级节点，这里用个通俗的例子说明：
+
+	> 例如从1000个超级节点（超级节点列表）中选出需要的100个超级节点（备选超级节点），其余的900个超级节点进行投票选出10个超级节点，这10个超级节点进行顺序代理。
+
+	基于上述思想，数据结构如下：
+```
+	type SelDelegates struct {  //被选中的超级节点 
+		addresss string 
+		votes int //其他超级节点对其的投票数
+	}
+	type SelDels []SelDelegates //被选中的超级节点的集合
+	const AllDelList = 1000
+	const SelDelList = 100
+	const WinDelList = 10
+	var Blockchain []Block  //定义一个区块链
+	var announcements = make(chan string) // 也是一个通道 主GO TCP服务器将向所有节点广播最新的区块链
+	var mutex = &sync.Mutex{}	//防止同一时间产生多个区块
+	var AllDelegatesList []string   //所有的超级节点列表
+	var SelDelegatesList SelDels  //被选中的超级节点
+	var WinDelegatesList SelDels  //最后代理的超级节点
+```
+基于上述的数据结构，每当出块时，需要挑选超级节点，代码如下：
+```
+func pickNode(conn net.Conn) SelDels {
+	/// 1.挑选SelDelegatesList
+	indexs := make(map[int]bool, SelDelList)
+	for i := 0; i < SelDelList; i++ {
+		output:
+		index := rand.Intn(AllDelList) //随机出一个节点的索引
+		if _, ok := indexs[index]; !ok {
+			goto output
+		}
+		indexs[index] = true
+		mutex.Lock()
+		SelDelegatesList[i].addresss = AllDelegatesList[index]
+		mutex.Unlock()
+	}
+	// 广播SelDelegatesList
+	go func(){
+		for {
+			msg := <- announcements
+			io.WriteString(conn, msg)
+		}
+	}()
+	/// 2. 其他超级节点进行投票
+	for {
+		var address string
+		DelsVoted := make(map[string]bool, AllDelList)
+		go func() {
+			for {
+				count := 0
+				for _, v := range DelsVoted {
+					if v == true {
+						count++
+					}
+				}
+				if count == AllDelList {
+					return
+				}
+			}
+		}()
+		io.WriteString(conn, "Enter Vote index :")
+		scanBalance := bufio.NewScanner(conn)
+		index, _ := strconv.Atoi(scanBalance.Text())
+		mutex.Lock()
+		SelDelegatesList[index].votes = SelDelegatesList[index].votes + 1
+		DelsVoted[address] = true
+		mutex.Unlock()
+	}
+	/// 3.选出票数最高的前10位代理人
+	sort.Sort(SelDelegatesList)
+	WinDelegatesList = SelDelegatesList[:WinDelList]
+	log.Println("WinDelegatesList")
+	return WinDelegatesList
+}
+```
+其中这里值得说明的一点在于，`sort.Sort(SelDelegatesList)`这个是对`SelDelegatesList`进行票数排序，最后选出前10位最终代理者。所以在前面的数据结构中，定义了一个类型`type SelDels []SelDelegates`，基于Go语言的特性，对于，只要实现了相应接口内的方法，即可使用排序这个函数。代码如下：
+```
+func (SelList SelDels) Len() int {
+	return len(SelList)
+}
+func (SelList SelDels) Swap(i, j int) {
+	SelList[i], SelList[j] = SelList[j], SelList[i]
+}
+func (SelList SelDels) Less(i, j int) bool {
+	return SelList[j].votes < SelList[i].votes
+}
+```
+函数`func (SelList SelDels) Less(i, j int) bool`中，方法的不同可以控制所设计的数据结构是大叉堆还是小叉堆。
 
 
 
