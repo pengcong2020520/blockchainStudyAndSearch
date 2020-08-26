@@ -93,7 +93,7 @@ func isHashValid(hash string, difficulty int) bool {
 	isHashValid 判断hash是否满足当前的难度系数，如果难度系数为2，则当前hash的前缀有2个0。
 
 * **基于POW的区块链网络代码main函数**
-```
+```go
 func main() {
 	// 创建初始区块
 	genesisBlock := &Block{
@@ -336,7 +336,7 @@ type Block struct {
 	> 例如从1000个超级节点（超级节点列表）中选出需要的100个超级节点（备选超级节点），其余的900个超级节点进行投票选出10个超级节点，这10个超级节点进行顺序代理。
 
 	基于上述思想，数据结构如下：
-```
+```go
 	type SelDelegates struct {  //被选中的超级节点 
 		addresss string 
 		votes int //其他超级节点对其的投票数
@@ -353,7 +353,8 @@ type Block struct {
 	var WinDelegatesList SelDels  //最后代理的超级节点
 ```
 基于上述的数据结构，每当出块时，需要挑选超级节点，代码如下：
-```
+
+```go
 func pickNode(conn net.Conn) SelDels {
 	/// 1.挑选SelDelegatesList
 	indexs := make(map[int]bool, SelDelList)
@@ -677,7 +678,7 @@ HP编码用于对数据库中的树节点key进行编码
 > 2. 生成RSA的公钥，主要是通过私钥生成，存储同样需要进行上述处理。
 
 代码实现如下：
-```
+```go
 func GenerateRSA(length int) {
 	// 1. 生成RSA私钥
 	//GenerateKey generates an RSA keypair of the given bit size using the random source random (for example, crypto/rand.Reader).
