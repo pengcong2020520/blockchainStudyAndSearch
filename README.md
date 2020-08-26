@@ -634,6 +634,182 @@ HP编码用于对数据库中的树节点key进行编码
 为了解决key长度的限制问题，在传入数据时，堆数据项的key进行了一次hash计算，sha3(key)，有效避免了树中出现长度很长的路径。
 但是需要在数据库中存储额外的sha3(key)与key之间的对应关系。
 
+## 不对称加密算法（数字签名）
+本部分主要是以基于RSA算法的数字签名作为实例进行不对称加密算法说明介绍。
+### 非对称加密算法的特性
+* 用私钥（或者公钥）对消息进行加密，需要用公钥（或者私钥）对消息进行解密才能获得消息。
+* 其中，公钥可以其他人公开，私钥需要个人进行保密，且公钥无法通过推算得到私钥。
+### 非对称加密技术在区块链中的应用场景
+* 信息加密：发送者A使用B的公钥对消息进行加密再发给B，B可以通过自己的私钥对消息进行解密。
+* 数字签名：发送者A采用自己的私钥加密信息后，发送给B，B使用A的公钥对信息进行解密，从而可以确保信息是由A发送的。
+* 登录认证：由客户端使用私钥加密 登录信息 后，发送给服务器端，服务器接收后采用该客户端的公钥进行解密并认证登录信息。
+
+### 比特币系统的非对称加密机制
+1. 由操作系统底层的随机数生成器生成一个256位的私钥
+2. 生成的私钥通过SHA256和Base58编码得到一个用户端使用的私钥，这个私钥长度易识别且易书写
+3. 系统底层生成的私钥通过seco256k1椭圆曲线算法，可以得到一个65字节的公钥（相当于一个随机数）
+4. 将这个公钥进行SHA256和RIPEMD160编码得到20个字节的公钥，这是一个公钥的摘要结果
+5. 通过这个20字节的公钥，进行SHA256和Base58编码可以得到一个33字符的比特币账户地址
+
+
+### 基于RSA的数字签名与验证
+#### RSA加密原理RSA加密原理
+* 加密：C = M^e mod n
+
+* 解密：M = C^d mod n
+
+> 其中(e,n)即为公钥、（d,n）即为私钥，其中的e,n,d需要符合一定条件的取值
+
+求解过程：
+
+	需要有两个质数p,q，满足 n = pq;
+	取正整数e,d,使得ed mod (p-1)(q-1) = 1  =>  当且仅当 e 与（p-1)(q-1) 互质时，存在 d。
+
+由于公钥公开，即e,n公开，因此破解RSA私钥，演变为对n质因数分解求p,q。
+实际中，n的长度为2048位以上，研究表明n>200位时，分解n就非常困难了，故RSA算法的安全性可以得到很高的保障。
+
+#### 实现RSA加密解密
+
+* 首先需要导入rsa加密包：`import "crypto/rsa"`，其中实现RSA时基于PKCS#1规范。
+
+* 生成RSA钥匙对————私钥和公钥
+> 1. 生成RSA的私钥，主要借助`func GenerateKey(random io.Reader, bits int) (*PrivateKey, error)`函数；但是生成的私钥为了便于保存，则需要进行加密，根据一些权威的存储说明先进行x509序列化再进行PEM序列化，这样就可以使得生成的私钥安全保存在电脑中。
+> 2. 生成RSA的公钥，主要是通过私钥生成，存储同样需要进行上述处理。
+
+代码实现如下：
+```
+func GenerateRSA(length int) {
+	// 1. 生成RSA私钥
+	//GenerateKey generates an RSA keypair of the given bit size using the random source random (for example, crypto/rand.Reader).
+	privateKey, err := rsa.GenerateKey(rand.Reader, length)
+	//生成一个给定长度length的私钥，rand.Reader为加密包的随机数生成器的全局共享实例
+	if err != nil {
+		fmt.Println("Failed to generate privateKey !", err)
+		return
+	}
+	//2. 对所产生的私钥进行x509序列化并定制PEM的Block
+	x509privateKey := x509.MarshalPKCS1PrivateKey(privateKey)
+	privateKeyBlock := pem.Block{
+		Type:    "private key",
+		Headers: nil,
+		Bytes:   x509privateKey,
+	}
+	//3. 将私钥pem序列化并写入文件中
+	filename := "/ConsensusAlgorithm/rsa/key/RSAprivatekey.txt"
+	privatekeyfile, err := os.Create(filename)
+	if err != nil {
+		fmt.Println("Failed to Create RSAprivatekey file ! ", err)
+		return
+	}
+	defer privatekeyfile.Close()
+	err = pem.Encode(privatekeyfile, &privateKeyBlock)  //将block中的信息pem序列化并写入file中
+	if err != nil {
+		fmt.Println("Failed to pem encode privateKeyBlock")
+		return
+	}
+
+	// 4. 生成公钥(公钥可由私钥产生)  其他步骤与上述相同
+	publicKey := privateKey.PublicKey
+	x509publicKey := x509.MarshalPKCS1PublicKey(&publicKey)
+	publicKeyBlock := pem.Block{
+		Type:    "public key",
+		Headers: nil,
+		Bytes:   x509publicKey,
+	}
+	path := "/ConsensusAlgorithm/rsa/key/RSApublickey.txt"
+	publicKeyfile, err := os.Create(path)
+	if err != nil {
+		fmt.Println("Failed to Create RSApublickey file ! ", err)
+		return
+	}
+	defer publicKeyfile.Close()
+	err = pem.Encode(publicKeyfile, &publicKeyBlock)
+	if err != nil {
+		fmt.Println("Failed to pem encode publicKeyBlock")
+		return
+	}
+}
+```
+* 用私钥对数据进行签名
+	1. 直接调用上述所生成的私钥文件，对取出的私钥文件内容进行上述序列化的反序列换，即先进行pem反序列化，再进行x509反序列化
+	2. 将需要发送的消息`data`进行hash处理，这样使得传输的消息更为安全，然后用rsa包中的`func SignPKCS1v15(rand io.Reader, priv *PrivateKey, hash crypto.Hash, hashed []byte) ([]byte, error)`函数获得进行了数字签名的消息
+
+	**代码实现**：
+	```
+	//对数据进行签名
+func SignatureRSA(data string) string{
+	//1. 获取私钥(打开keystore文件 )
+	privateKeyPath := "/ConsensusAlgorithm/rsa/key/RSAprivatekey.txt"
+	file, err := os.Open(privateKeyPath)// 得到*File类型
+	if err != nil {
+		log.Panic(err)
+	}
+	defer file.Close()
+	// 获取文件长度
+	fileInfo, _ := file.Stat()
+	fileSize := fileInfo.Size()
+	//定义一个放数据的切片
+	buf := make([]byte, fileSize)
+	//将file内容读取到buf缓存中
+	file.Read(buf)
+	//2. 将得到的私钥内容进行pem与x509解码得到私钥明文
+	privateKeyBlock, _ := pem.Decode(buf)
+	privateKey, err := x509.ParsePKCS1PrivateKey(privateKeyBlock.Bytes)
+	if err != nil {
+		fmt.Println("Failed to parsed private key !")
+		return ""
+	}
+	//3. 用私钥进行签名
+	hash256 := sha256.New()
+	//将数据进行 json 序列化
+	datajson, _ := json.Marshal(data)
+	//将json数据进行hash
+	hash256.Write(datajson)
+	//用私钥进行签名
+	signData, _ := rsa.SignPKCS1v15(rand.Reader, privateKey, crypto.SHA256, hash256.Sum(nil))
+	if err != nil {
+		fmt.Println("Failed to sign data!", err)
+		return ""
+	}
+	return string(signData)
+}
+	```
+* 用公钥对数据进行验证
+与私钥基本相同，直接上代码：
+```
+///验证签名
+func VerifyRSA(data string, signData string) bool {
+	// 1. 获取公钥文件
+	publicKeyPath := "/ConsensusAlgorithm/rsa/key/RSApublickey.txt"
+	file, err := os.Open(publicKeyPath)// 得到*File类型
+	if err != nil {
+		log.Panic(err)
+	}
+	defer file.Close()
+	// 获取文件长度
+	fileInfo, _ := file.Stat()
+	fileSize := fileInfo.Size()
+	//定义一个放数据的切片
+	buf := make([]byte, fileSize)
+	//将file内容读取到buf缓存中
+	file.Read(buf)
+	//2. 将得到的公钥内容进行pem与x509解码得到公钥明文
+	publicKeyBlock, _ := pem.Decode(buf)
+	publicKey, err := x509.ParsePKCS1PublicKey(publicKeyBlock.Bytes)
+	if err != nil {
+		fmt.Println("Failed to parsed public key !")
+		return false
+	}
+	hash256 := sha256.New()
+	jsonData, _ := json.Marshal(data)
+	hash256.Write(jsonData)
+	err = rsa.VerifyPKCS1v15(publicKey, crypto.SHA256, hash256.Sum(nil), []byte(signData))
+	if err != nil {
+		return false
+	}
+	return true
+}
+```
 
 
 
