@@ -735,7 +735,7 @@ func GenerateRSA(length int) {
 	2. 将需要发送的消息`data`进行hash处理，这样使得传输的消息更为安全，然后用rsa包中的`func SignPKCS1v15(rand io.Reader, priv *PrivateKey, hash crypto.Hash, hashed []byte) ([]byte, error)`函数获得进行了数字签名的消息
 
 	**代码实现**：
-	```
+```go
 	//对数据进行签名
 func SignatureRSA(data string) string{
 	//1. 获取私钥(打开keystore文件 )
@@ -773,10 +773,10 @@ func SignatureRSA(data string) string{
 	}
 	return string(signData)
 }
-	```
+```
 * 用公钥对数据进行验证
 与私钥基本相同，直接上代码：
-```
+```go
 ///验证签名
 func VerifyRSA(data string, signData string) bool {
 	// 1. 获取公钥文件
