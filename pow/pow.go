@@ -19,9 +19,9 @@ const DIFFICULTY  = 1000000000
 
 
 type Block struct {
-	Index  int			// 高度
+	BlockNumber  int			// 高度
 	Timestamp string		// 时间戳
-	BPM int				// 交易信息
+	Info int				// 交易信息
 	PrevHash string     // 上一个哈希值
 	HashCode string		// 当前的哈希值
 	Difficulty int    // 区块验证者  其中POW为difficulty
@@ -30,17 +30,17 @@ type Block struct {
 
 var Blockchain []Block  //定义一个区块链
 
-var mutex = &sync.Mutex{}
+var mutex = &sync.Mutex{} //防止同一时间产生多个区块
 
-var announcements = make(chan string)
+var announcements = make(chan string) //出块结束后向所有节点进行广播
 
 //生成区块函数
 //由旧区块 、 新的BPM结构 、 验证者  产生新的区块
-func generateBlock(oldBlock Block, BPM int, address string) (Block) {
+func generateBlock(oldBlock Block, info int, address string) (Block) {
 	newBlock := &Block {
-		Index : oldBlock.Index + 1,
+		BlockNumber : oldBlock.BlockNumber + 1,
 		Timestamp : time.Now().Format("20060102150405"),
-		BPM	: BPM,
+		Info	: info,
 		PrevHash : oldBlock.HashCode,
 		Difficulty : DIFFICULTY,
 	}
@@ -144,10 +144,6 @@ func handleConn(conn net.Conn) {
 
 
 func main() {
-	//err := godotenv.Load()
-	//if err != nil {
-	//	log.Fatal(err)
-	//}
 	// 创建初始区块
 	genesisBlock := &Block{
 		Index :	0,
@@ -158,7 +154,6 @@ func main() {
 	}
 	genesisBlock.HashCode = calculateBlockHash(*genesisBlock)
 
-	spew.Dump(*genesisBlock)
 	Blockchain = append(Blockchain, *genesisBlock)
 	server, err := net.Listen("tcp", ":8080")
 	if err != nil {

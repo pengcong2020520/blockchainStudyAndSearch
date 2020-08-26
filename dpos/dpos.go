@@ -98,6 +98,12 @@ func pickNode(conn net.Conn) SelDels {
 	}
 
 	// 广播SelDelegatesList
+	go func(){
+		for {
+			msg := <- announcements
+			io.WriteString(conn, msg)
+		}
+	}()
 
 	/// 2. 其他超级节点进行投票
 	for {

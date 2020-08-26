@@ -24,9 +24,9 @@ import (
 // 基于每个节点的“资产”的数量，选举出一个获胜者，并将获胜者（区块）添加到区块链当中去
 
 type Block struct {
-	Index  int			// 高度
+	BlockNumber  int			// 高度
 	Timestamp string		// 时间戳
-	BPM int				// 交易信息
+	Info int				// 交易信息
 	prevHash string     // 上一个哈希值
 	HashCode string		// 当前的哈希值
 	Validator string    // 区块验证者  其中POW为difficulty
@@ -43,7 +43,7 @@ var announcements = make(chan string) // 也是一个通道 主GO TCP服务器�
 
 var mutex = &sync.Mutex{}	//防止同一时间产生多个区块
 
-var validators = make(map[string]int)  //节点的临时存储map 同时也会保存每个节点持有的令牌数
+var validators = make(map[string]int)  //节点的临时存储map 同时也会保存每个节点质押的token数
 
 //生成区块函数
 	//由旧区块 、 新的BPM结构 、 验证者  产生新的区块
@@ -158,15 +158,12 @@ func pickWinner() {
 	OUTER:
 	if len(temp) > 0 {
 			for _, block := range temp {
-
 				//如果验证者验证过即不可再验证
 				for _, node := range lotteryPool {
 					if block.Validator == node {
 						goto OUTER
 					}
 				}
-
-
 				mutex.Lock()
 				setValidators := validators  //validators 每个账户地址对应的token数
 				mutex.Unlock()
@@ -177,7 +174,6 @@ func pickWinner() {
 					}
 				}
 			}
-
 			//随机选取矿工
 			s := rand.NewSource(time.Now().Unix())
 			r := rand.New(s)
@@ -193,7 +189,6 @@ func pickWinner() {
 					break
 				}
 			}
-
 	}
 	mutex.Lock()
 	tempBlocks = []Block{}
