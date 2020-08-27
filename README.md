@@ -812,6 +812,476 @@ func VerifyRSA(data string, signData string) bool {
 }
 ```
 
+### p2p网络
+
+#### **概念**
+* p2p网络是一种网络覆盖层，建立在公开互联网之上。p2p网络中的每一个节点都是对等的，它既可以是网络资源的供应者，也可以是网络资源的使用者。
+
+#### **步骤**
+* 在传统客户端-服务器的网络中中都是通过服务器作为中转使得客户端主机A与客户端主机B进行通信。
+* p2p网络中，主要是为了让不同的局域网中的用户进行通信。
+* 需要借助NAT技术，虚拟化为IP地址，然后通过一个“中间人”（可以通过UDP），让两个节点之间建立联系，之后两个节点就会互相认识对方，进而可以通信。
+
+#### **工作原理**（以太坊）
+以太坊的客户端就是一种基于 Kademlia 分布式哈希表（主要是让P2P网络中可以有效的定位和存储内容）实现 RLPx 节点发现协议。
+
+##### Kademlia
+* 每个客户端会分配一个ID号，通过SHA3算法转换为一个256位的值。Kademlia主要是通过XOR操作（即通过ID哈希值的按位异或值）来定义一个距离。且每个节点都会包含256个不同的 buckets ，每个 buckets 都会存储里本节点距离较近的16个节点。当然每个buckets中的节点都是按距离分的。
+>如果需要找某个节点，则就找与目标节点最近的节点，然后依次迭代即可。
+
+##### 节点间通信
+1. 通过UDP连接交换P2P网络的消息；
+2. 通过ping消息响应pong消息来判断相邻节点是否能响应；
+3. 建立好节点间的连接之后，节点铜鼓加密和认证的TCP连接来交换区块链信息。
+
+具体实现代码：
+* 通过UDP连接来交换P2P网络消息，负责建立相邻节点的连接
+```go
+// server.go
+const TIMEOUT = time.Second * 30
+
+func main() {
+	//建立一个本地的udp协议网络
+	listener, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4zero, Port: 8080})
+	if err != nil  {
+		fmt.Println("Failed to listen udp! ", err)
+		return
+	}
+	fmt.Println("local addr : ", listener.LocalAddr().String())
+	peers := make([]net.UDPAddr, 0, 2)
+	data := make([]byte, 1024)
+	for {
+		n, remoteAddr, err := listener.ReadFromUDP(data)
+		if err != nil || n <= 0 {
+			fmt.Println("Failed to listen data from udp ! ", err)
+		}
+		fmt.Printf("addr: %s ==> data: %s \n", remoteAddr.String(), data[:n])
+		peers = append(peers, *remoteAddr)
+		if len(peers) == 2 {
+			log.Printf("addr: %s <=====> addr: %s \n", peers[0].String(), peers[1].String())
+			listener.WriteToUDP([]byte(peers[1].String()), &peers[0])
+			listener.WriteToUDP([]byte(peers[0].String()), &peers[1])
+			time.Sleep(TIMEOUT)
+			return
+		}
+	}
+}
+```
+
+```go
+func main() {
+	//增加可视性
+	if len(os.Args) < 2 {
+		fmt.Println("Client Flag == ")
+		fmt.Println("cli.exe + Flag !!")
+		os.Exit(0)
+	}
+	tag := os.Args[1]
+
+	//原进程地址
+	srcAddr := &net.UDPAddr{IP: net.IPv4zero, Port: 8081}
+	//目标进程地址
+	dstAddr := &net.UDPAddr{IP: net.ParseIP("127.0.0.2"), Port: 8080}
+	conn, _ := net.DialUDP("udp", srcAddr, dstAddr)
+	conn.Write([]byte("hello !!! " + tag))
+	data := make([]byte, 1024)
+	n, remoteAddr, err := conn.ReadFromUDP(data)
+	if err != nil {
+		fmt.Printf("Failede to read from udp !", err)
+	}
+	conn.Close()
+	fmt.Println(string(data))
+	peer := parseAddr(string(data[:n]))
+	fmt.Printf("local: %s server: %s peer: %s\n", srcAddr, remoteAddr, peer)
+	connect(srcAddr, &peer, tag)
+}
+
+func parseAddr(addr string) net.UDPAddr {
+	t := strings.Split(addr, ":")
+	port, _ := strconv.Atoi(t[1])
+	return net.UDPAddr{
+		IP:   net.ParseIP(t[0]),
+		Port: port,
+		Zone: "",
+	}
+}
+
+func connect(src *net.UDPAddr,dst *net.UDPAddr, tag string) {
+	conn, err := net.DialUDP("udp", src, dst)
+	if err != nil {
+		fmt.Println("Failed to dial udp! ", err)
+	}
+	defer conn.Close()
+	if _, err := conn.Write([]byte("hand one, hi nihao ! ")); err != nil {
+		fmt.Println("Failede to hand one!! ", err)
+	}
+	go func() {
+		for {
+			time.Sleep(10 * time.Second)
+			if _, err = conn.Write([]byte("tag=>")); err != nil {
+				fmt.Println("Failed to send msg", err)
+			}
+		}
+	}()
+
+	for {
+		data := make([]byte, 1024)
+		n, _, err := conn.ReadFromUDP(data)
+		if err != nil {
+			fmt.Println("Failed to read data!! ", err)
+		} else {
+			fmt.Println("Get data %s success! ", data[:n])
+		}
+	}
+}
+```
+* 基于区块链的P2P网络，用于打造区块链，用协程的方式不断等待节点连接，如果挖出一个区块，就通过最近的节点转交给下一个节点。节点间通过对比区块链的长度，始终保持那个最长的链即可。
+```go
+type Block struct {
+	BlockNumber  int			// 高度
+	Timestamp string		// 时间戳
+	Info int				// 交易信息
+	PrevHash string     // 上一个哈希值
+	HashCode string		// 当前的哈希值
+}
+
+var Blockchain []Block  //定义一个区块链
+
+var mutex = &sync.Mutex{} //防止同一时间产生多个区块
+
+var announcements = make(chan string) //出块结束后向所有节点进行广播
+
+func generateBlock(oldBlock Block, info int, address string) (Block) {
+	newBlock := &Block {
+		BlockNumber : oldBlock.BlockNumber + 1,
+		Timestamp : time.Now().Format("20060102150405"),
+		Info	: info,
+		PrevHash : oldBlock.HashCode,
+		Difficulty : DIFFICULTY,
+	}
+	newBlockHash := calculateBlockHash(*newBlock)
+	//产生Nonce
+	for i := 0; ;i++ {
+		hex := fmt.Sprintf("%x", i)
+		newBlock.Nonce = hex
+		if !isHashValid(newBlockHash, (*newBlock).Difficulty) {
+			fmt.Println(newBlockHash, "do work!")
+		} else {
+			fmt.Println(newBlockHash, "work done")
+			(*newBlock).HashCode = newBlockHash
+			break
+		}
+
+	}
+	return *newBlock
+}
+
+//对一个Block进行hash  将一个block的所有字段连接到一起后 再转换为一个hash值
+func  calculateBlockHash(block Block) string {
+	return calculateHash(fmt.Sprintf("%v%v%v%v",
+		block.Index, block.Timestamp, block.BPM, block.PrevHash, block.Nonce))
+}
+
+func calculateHash(s string) string {
+	h := sha256.New()
+	h.Write([]byte(s))
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// 验证hash是否有效
+//新区块中的preHash存储上一个区块的Hash
+//for 循环通过循环改变Nonce,然后选出符合相应难度系数的Nonce
+//isHashValid 判断hash是否满足当前的难度系数，如果难度系数为2，则当前hash的前缀有2个0
+func isHashValid(hash string, difficulty int) bool {
+	var b = len(hash)
+	var end int
+	for i := 0; i < b; i++ {
+		if hash[i] != '0' {
+			end = i
+			break
+		}
+	}
+	return  end >= difficulty
+}
+
+// 验证区块内容
+func isBlockValid(newBlock, oldBlock Block) bool {
+	if newBlock.Index == oldBlock.Index + 1 && newBlock.PrevHash == oldBlock.HashCode && calculateBlockHash(newBlock) == newBlock.HashCode {
+		return true
+	}
+	return false
+}
+
+
+
+
+
+
+// secio  是否对数据流加密；
+// privatekey 保证host的安全
+// options 构造我们的host地址，以便其他节点链接
+func makeBasicHost(secio bool, listenPort int) (host.Host, error) {
+	//生成privatekey
+	privatekey, _, err := crypto.GenerateKeyPairWithReader(crypto.RSA, 2048, rand.Reader)
+	if err != nil {
+		fmt.Println("Failed to generateKey")
+		return nil, err
+	}
+
+	//创建函数处理集
+	options := []libp2p.Option{
+		libp2p.ListenAddrStrings(fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", listenPort)),
+		libp2p.Identity(privatekey),
+	}
+
+	if !secio {
+		options = append(options, libp2p.NoSecurity)
+	}
+
+	basicHost, err := libp2p.New(context.Background(), options...)
+	if err != nil {
+		return nil, err
+	}
+	//创建主机多地址
+	hostAddr, _ := multiaddr.NewMultiaddr(fmt.Sprintf("/ipfs/%s", basicHost.ID().Pretty()))
+
+	//通过封装两个地址来建立一个多地址到达主机
+	addr := basicHost.Addrs()[0]
+	fullAddr := addr.Encapsulate(hostAddr)
+	log.Println("I'm ", fullAddr)
+	return basicHost, nil
+}
+
+func streamHandle(s network.Stream) {
+	log.Println("Got a new stream")
+	rw := bufio.NewReadWriter(bufio.NewReader(s), bufio.NewWriter(s))
+
+	go readData(rw)
+	go writeData(rw)
+}
+
+func readData(rw *bufio.ReadWriter) {
+	for {
+		str, _ := rw.ReadString('\n')
+		if str == "" {
+			return
+		}
+		if str != "\n" {
+			chain := make([]Block, 0)
+			if err := json.Unmarshal([]byte(str), &chain); err != nil {
+				log.Fatal(err)
+			}
+			mutex.Lock()
+			if len(chain) > len(Blockchain) {
+				Blockchain = chain
+				bytes, err := json.MarshalIndent(Blockchain, "", "")
+				if err != nil {
+					log.Fatal(err)
+				}
+				fmt.Println(string(bytes))
+			}
+			mutex.Unlock()
+		}
+	}
+}
+
+func writeData(rw *bufio.ReadWriter) {
+	go func() {
+		for {
+			time.Sleep(5 * time.Second)
+			mutex.Lock()
+			bytes, err := json.Marshal(Blockchain)
+			if err != nil {
+				log.Println(err)
+			}
+			rw.WriteString(fmt.Sprintf("%s\n", string(bytes)))
+			rw.Flush()
+			mutex.Unlock()
+		}
+	}()
+	stReader := bufio.NewReader(os.Stdin)
+	for {
+		fmt.Print(">")
+		sendData, err := stReader.ReadString('\n')
+		if err != nil {
+			log.Fatal(err)
+		}
+		sendData = strings.Replace(sendData, "\n", "", -1)
+		bpm, err := strconv.Atoi(sendData)
+		if err != nil {
+			log.Fatal(err)
+		}
+		newBlock := generateBlock(Blockchain[len(Blockchain)-1], bpm)
+
+		if isBlockValid(newBlock, Blockchain[len(Blockchain)-1]) {
+			mutex.Lock()
+			Blockchain = append(Blockchain, newBlock)
+			mutex.Unlock()
+		}
+
+		bytes, err := json.Marshal(Blockchain)
+		if err != nil {
+			log.Println(err)
+		}
+
+		mutex.Lock()
+		rw.WriteString(fmt.Sprintf("%s\n", string(bytes)))
+		rw.Flush()
+		mutex.Unlock()
+	}
+}
+
+func main() {
+	t := time.Now()
+	genesisBlock := Block{}
+	genesisBlock = Block{0, t.String(), 0, calculateHash(genesisBlock), ""}
+
+	Blockchain = append(Blockchain, genesisBlock)
+
+	log2.SetAllLoggers(logging.INFO)
+	// Parse options from the command line
+	listenF := flag.Int("l", 0, "wait for incoming connections") //打开指定的接口
+	target := flag.String("d", "", "target peer to dial") //指定想要连接的地址
+
+	secio := flag.Bool("secio", false, "enable secio")
+	flag.Parse()
+
+	if *listenF == 0 {
+		log.Fatal("Please provide a port to bind on with -l")
+	}
+
+	// Make a host that listens on the given multiaddress
+	host, err := makeBasicHost(*secio, *listenF)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	if *target == "" {
+		log.Println("listening for connections")
+		host.SetStreamHandler("/p2p/1.0.0", streamHandle)
+		select {} //阻塞程序
+	} else {
+		host.SetStreamHandler("/p2p/1.0.0", streamHandle)
+		ipfsaddr, err := ma.NewMultiaddr(*target)
+		if err != nil {
+			log.Fatalln(err)
+		}
+		pid, err := ipfsaddr.ValueForProtocol(ma.P_IPFS)
+		if err != nil {
+			log.Fatalln(err)
+		}
+
+		peerid, err := peer.IDB58Decode(pid)
+		if err != nil {
+			log.Fatalln(err)
+		}
+
+		targetPeerAddr, _ := ma.NewMultiaddr(
+			fmt.Sprintf("/ipfs/%s", peer.IDB58Encode(peerid)))
+		targetAddr := ipfsaddr.Decapsulate(targetPeerAddr)
+
+		ha.Peerstore().AddAddr(peerid, targetAddr, pstore.PermanentAddrTTL)
+
+		log.Println("opening stream")
+
+		s, err := ha.NewStream(context.Background(), peerid, "/p2p/1.0.0")
+		if err != nil {
+			log.Fatalln(err)
+		}
+
+		rw := bufio.NewReadWriter(bufio.NewReader(s), bufio.NewWriter(s))
+
+		go writeData(rw)
+		go readData(rw)
+
+		select {} // hang forever
+
+	}
+}
+
+```
+* 基于ethereum，创建P2P节点和协议，实现p2p网络的msg通信
+```go
+package p2p
+
+import (
+	"fmt"
+	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/p2p"
+)
+
+const messageId = 0
+type Message string
+
+func main() {
+	nodekey, _ := crypto.GenerateKey()
+	server := p2p.Server{
+		MaxPeers : 10,
+		PrivateKey : nodekey,
+		Name : "my nod name",
+		ListenAddr : "30300",
+		Protocols : []p2p.Protocol{NewProtocol()},
+	}
+	server.Start()
+	select {}    //阻塞
+
+}
+
+func NewProtocol() p2p.Protocol {
+	return p2p.Protocol{
+		Name:    "NewProtocol",
+		Version: 1,
+		Length:  1,
+		Run:     msgHandler,
+	}
+}
+
+func msgHandler(peer *p2p.Peer, ws p2p.MsgReadWriter) error {
+	for {
+		msg, err := ws.ReadMsg()    //从P2P网络中读取msg
+		if err != nil {
+			return err
+		}
+		var myMessage [1]Message
+		err = msg.Decode(&myMessage) // 对数据进行编码并放入到myMessage中
+		if err != nil {
+			continue
+		}
+
+		switch myMessage[0] {
+		case "foo":
+			err := p2p.SendItems(ws, messageId, "bar")
+			if err != nil {
+				return err
+			}
+		default:
+			fmt.Println("recvierMsg : ", myMessage)
+		}
+	}
+
+	return nil
+}
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
