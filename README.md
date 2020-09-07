@@ -4,6 +4,7 @@
 * **POW的实现**
 * **POS的实现**
 * **DPOS的实现**
+* **paxos的实现**
 * **构建Merkle树**
 * **MPT树的数据结构**
 * **不对称加密算法介绍**
@@ -431,6 +432,11 @@ func (SelList SelDels) Less(i, j int) bool {
 }
 ```
 函数`func (SelList SelDels) Less(i, j int) bool`中，方法的不同可以控制所设计的数据结构是大叉堆还是小叉堆。
+
+### paxos共识算法
+paxos时一种分布式、一致性的共识算法。
+主要的流程：proposer给出提案proposal，发给Acceptor进行投票，如果超过半数以上的acceptor接收了该提案，则该提案被采取；并且由P2P网络中的learner对被采纳的提案进行学习。
+
 
 ## Merkle结构树
 在上面介绍的主流共识算法中，在构建区块时，都提到了一个交易信息的元素
